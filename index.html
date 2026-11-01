@@ -140,6 +140,7 @@ var Core = (function () {
 
   // Each chunk is drawn top-to-bottom; the last row sits on the ground (y = 0).
   // #  block   ^ spike   v hanging spike   * jump pad   o jump orb
+  // U / D  gravity portal (up / back down)   > / <  speed portal (fast / normal)
   var CHUNKS = {
     s1: ['....^....'],
     s2: ['....^^.....'],
@@ -223,7 +224,33 @@ var Core = (function () {
       '........##................................',
       '........##................................',
       '...#....##................................',
-      '...#^^^^##^^^^^^^^^^^^^^^^^^^^^^^^^^^.....']
+      '...#^^^^##^^^^^^^^^^^^^^^^^^^^^^^^^^^.....'],
+    // Chunks for the portal level (Voltaje)
+    flipA: [
+      '......############################........',
+      '..............v.....vv......v......D......',
+      '..........................................',
+      '..........................................',
+      '..........................................',
+      '....U..^^^^^^^^^^^^^^^^^^^^^^^^^^^........'],
+    flipB: [
+      '...................#################........',
+      '.........................v...vv......D......',
+      '......#############.........................',
+      '.............v..............................',
+      '............................................',
+      '............................................',
+      '............................................',
+      '....U..^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^.......'],
+    fastOn: [
+      '..>....'],
+    fastOff: [
+      '..<....'],
+    low: [
+      '.....################...',
+      '........................',
+      '........................',
+      '.........^....^^...^....']
   };
 
   var LEVELS = [
@@ -244,7 +271,13 @@ var Core = (function () {
       hint: 'Toca otra vez en el aire: tienes 2 saltos extra',
       bass: [45, 41, 36, 43], chords: [[0, 3, 7], [0, 4, 7], [0, 4, 7], [0, 4, 7]],
       color: '#8f7bff', bg: ['#1d1158', '#05031a'], ground: '#150c42',
-      seq: ['s2', 'dwall', 's3', 'field', 'stepsup', 'dwall2', 'sky1', 'orb', 'field', 'tunnel', 'sky2', 'dwall', 'hop', 'stepsup', 'sky1', 'field', 'dwall2', 'sky2'] }
+      seq: ['s2', 'dwall', 's3', 'field', 'stepsup', 'dwall2', 'sky1', 'orb', 'field', 'tunnel', 'sky2', 'dwall', 'hop', 'stepsup', 'sky1', 'field', 'dwall2', 'sky2'] },
+    { id: 'voltaje', name: 'Voltaje', diff: 'Portales · Muy difícil', speed: 11.5, bpm: 150, style: 'edm',
+      airJumps: 2, camLead: 4.5,
+      hint: 'Portal amarillo: gravedad al revés · Azul: normal',
+      bass: [38, 46, 41, 36], chords: [[0, 3, 7], [0, 4, 7], [0, 4, 7], [0, 4, 7]],
+      color: '#ff3864', bg: ['#0c2a4a', '#020812'], ground: '#081d36',
+      seq: ['s3', 'flipA', 'dwall2', 'fastOn', 'field', 'dwall', 'fastOff', 'low', 'flipB', 'sky1', 'fastOn', 'stepsup', 'fastOff', 'flipA', 'field', 'low', 'sky2', 'flipB', 'fastOn', 'dwall2', 'field', 'fastOff', 's3'] }
   ];
 
   var ENDLESS = { id: 'infinito', name: 'Infinito', diff: 'Sin final', speed: 10.4, bpm: 132,
@@ -268,6 +301,7 @@ var Core = (function () {
         else if (ch === 'v') out.push({ t: 'hspike', x: x, y: y });
         else if (ch === '*') out.push({ t: 'pad', x: x, y: y });
         else if (ch === 'o') out.push({ t: 'orb', x: x, y: y });
+        else if (ch === 'U' || ch === 'D' || ch === '>' || ch === '<') out.push({ t: 'portal', k: ch, x: x, y: y });
       }
     }
     return w;
@@ -306,7 +340,7 @@ var Core = (function () {
   }
 
   function newPlayer() {
-    return { x: 0, y: 0, vy: 0, grounded: true, dead: false, used: {}, i: 0, rot: 0, air: 0 };
+    return { x: 0, y: 0, vy: 0, grounded: true, dead: false, used: {}, i: 0, rot: 0, air: 0, gs: 1, sm: 1 };
   }
 
   function overlap(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
@@ -316,13 +350,15 @@ var Core = (function () {
   // Advances the player one fixed tick. Returns a bit mask of events: 1 jump, 2 pad, 4 orb, 8 landed, 16 air jump.
   // press = a new tap this tick; airJumps = extra jumps allowed in the air (0 on the classic levels).
   function step(p, objs, held, speed, press, airJumps) {
-    var ev = 0, wasGrounded = p.grounded;
-    p.x += speed * DT;
-    p.vy -= G * DT;
-    if (p.vy < MAXFALL) p.vy = MAXFALL;
+    // gs = gravity sign (1 normal, -1 upside down), sm = speed multiplier from speed portals.
+    var ev = 0, wasGrounded = p.grounded, gs = p.gs, flipped = gs < 0;
+    p.x += speed * p.sm * DT;
+    p.vy -= G * DT * gs;
+    if (p.vy * gs < MAXFALL) p.vy = MAXFALL * gs;
     p.y += p.vy * DT;
     p.grounded = false;
-    if (p.y <= 0) { p.y = 0; p.vy = 0; p.grounded = true; }
+    if (p.y <= 0) { p.y = 0; p.vy = 0; p.grounded = !flipped; }
+    if (p.y > 30) { p.dead = true; return ev; }
 
     while (p.i < objs.length && objs[p.i].x < p.x - 2) p.i++;
     for (var j = p.i; j < objs.length; j++) {
@@ -330,28 +366,41 @@ var Core = (function () {
       if (o.x > p.x + 2) break;
       if (o.t === 'block') {
         if (!overlap(p.x + 0.02, p.y, p.x + 0.98, p.y + 1, o.x, o.y, o.x + 1, o.y + 1)) continue;
-        if (p.vy <= 0 && p.y >= o.y + 0.7) { p.y = o.y + 1; p.vy = 0; p.grounded = true; }
-        else if (p.vy > 0 && p.y + 1 <= o.y + 0.15 && p.x + 0.8 > o.x + 0.2) { p.y = o.y - 1; p.vy = 0; }
-        else if (overlap(p.x + 0.1, p.y + 0.1, p.x + 0.9, p.y + 0.9, o.x, o.y, o.x + 1, o.y + 1)) { p.dead = true; }
+        if (!flipped) {
+          if (p.vy <= 0 && p.y >= o.y + 0.7) { p.y = o.y + 1; p.vy = 0; p.grounded = true; }
+          else if (p.vy > 0 && p.y + 1 <= o.y + 0.15 && p.x + 0.8 > o.x + 0.2) { p.y = o.y - 1; p.vy = 0; }
+          else if (overlap(p.x + 0.1, p.y + 0.1, p.x + 0.9, p.y + 0.9, o.x, o.y, o.x + 1, o.y + 1)) { p.dead = true; }
+        } else {
+          if (p.vy >= 0 && p.y + 1 <= o.y + 0.3) { p.y = o.y - 1; p.vy = 0; p.grounded = true; }
+          else if (p.vy < 0 && p.y >= o.y + 0.85 && p.x + 0.8 > o.x + 0.2) { p.y = o.y + 1; p.vy = 0; }
+          else if (overlap(p.x + 0.1, p.y + 0.1, p.x + 0.9, p.y + 0.9, o.x, o.y, o.x + 1, o.y + 1)) { p.dead = true; }
+        }
       } else if (o.t === 'spike') {
         if (overlap(p.x + 0.15, p.y + 0.1, p.x + 0.85, p.y + 0.9, o.x + 0.32, o.y, o.x + 0.68, o.y + 0.58)) p.dead = true;
       } else if (o.t === 'hspike') {
         if (overlap(p.x + 0.15, p.y + 0.1, p.x + 0.85, p.y + 0.9, o.x + 0.32, o.y + 0.42, o.x + 0.68, o.y + 1)) p.dead = true;
       } else if (o.t === 'pad') {
-        if (p.vy <= 0 && overlap(p.x, p.y, p.x + 1, p.y + 1, o.x + 0.1, o.y, o.x + 0.9, o.y + 0.35)) {
-          p.vy = PAD; p.grounded = false; ev |= 2;
+        if (p.vy * gs <= 0 && overlap(p.x, p.y, p.x + 1, p.y + 1, o.x + 0.1, o.y, o.x + 0.9, o.y + 0.35)) {
+          p.vy = PAD * gs; p.grounded = false; ev |= 2;
         }
       } else if (o.t === 'orb') {
         if (held && !p.used[o.id] && Math.abs(p.x + 0.5 - (o.x + 0.5)) < 0.95 && Math.abs(p.y + 0.5 - (o.y + 0.5)) < 0.95) {
-          p.used[o.id] = 1; p.vy = ORB; p.grounded = false; ev |= 4;
+          p.used[o.id] = 1; p.vy = ORB * gs; p.grounded = false; ev |= 4;
+        }
+      } else if (o.t === 'portal') {
+        if (p.x + 1 > o.x + 0.2 && p.x < o.x + 0.8 && Math.abs(p.y - o.y) < 1.6) {
+          if (o.k === 'U' && p.gs > 0) { p.gs = -1; p.vy *= 0.5; p.grounded = false; ev |= 32; }
+          else if (o.k === 'D' && p.gs < 0) { p.gs = 1; p.vy *= 0.5; p.grounded = false; ev |= 32; }
+          else if (o.k === '>' && p.sm === 1) { p.sm = 1.3; ev |= 64; }
+          else if (o.k === '<' && p.sm !== 1) { p.sm = 1; ev |= 64; }
         }
       }
       if (p.dead) return ev;
     }
     if (p.grounded && !wasGrounded) ev |= 8;
     if (p.grounded) p.air = airJumps || 0;
-    if (p.grounded && held) { p.vy = JUMP; p.grounded = false; ev |= 1; }
-    else if (!p.grounded && press && p.air > 0 && !(ev & 4)) { p.vy = AIRJUMP; p.air--; ev |= 16; }
+    if (p.grounded && held) { p.vy = JUMP * p.gs; p.grounded = false; ev |= 1; }
+    else if (!p.grounded && press && p.air > 0 && !(ev & 4)) { p.vy = AIRJUMP * p.gs; p.air--; ev |= 16; }
     return ev;
   }
 
@@ -746,6 +795,8 @@ var Core = (function () {
       S.acc -= Core.DT;
       var pr = input.press; input.press = false;
       var ev = Core.step(p, S.level.objs, h, S.theme.speed, pr, S.theme.airJumps);
+      if (ev & 32) { Sound.blip(p.gs < 0 ? 88 : 72); burst(p.x + 0.5, p.y + 0.5, p.gs < 0 ? '#ffe14d' : '#3de0ff', 14); S.flash = 0.25; }
+      if (ev & 64) { Sound.blip(p.sm > 1 ? 91 : 67); burst(p.x + 0.5, p.y + 0.5, '#ff7ad9', 10); }
       if (ev & 16) { Sound.blip(76 + (S.theme.airJumps - p.air) * 4); airRing(p); }
       if (ev & 2) { Sound.blip(79); burst(p.x + 0.5, p.y, '#ffe14d', 10); }
       if (ev & 4) { Sound.blip(84); burst(p.x + 0.5, p.y + 0.5, '#ffe14d', 12); }
@@ -762,9 +813,9 @@ var Core = (function () {
     if (p.grounded) {
       var target = Math.round(p.rot / (Math.PI / 2)) * (Math.PI / 2);
       p.rot += (target - p.rot) * Math.min(1, dt * 25);
-      if (Math.random() < 0.6) S.particles.push({ x: p.x, y: p.y + 0.05, vx: -2 - Math.random() * 2, vy: 1 + Math.random() * 2, life: 0.3, max: 0.3, s: 0.08 + Math.random() * 0.06, c: S.theme.color, g: 8 });
+      if (Math.random() < 0.6) S.particles.push({ x: p.x, y: p.gs < 0 ? p.y + 0.95 : p.y + 0.05, vx: -2 - Math.random() * 2, vy: 1 + Math.random() * 2, life: 0.3, max: 0.3, s: 0.08 + Math.random() * 0.06, c: S.theme.color, g: 8 });
     } else {
-      p.rot += dt * 7.4;
+      p.rot += dt * 7.4 * p.gs;
     }
 
     // camera
@@ -944,6 +995,8 @@ var Core = (function () {
         ctx.beginPath(); ctx.ellipse(X + T / 2, Y + T, T * 0.48, T * 0.4, 0, Math.PI, 0); ctx.fill();
         ctx.fillStyle = '#ffe14d';
         ctx.beginPath(); ctx.ellipse(X + T / 2, Y + T, T * 0.4, T * 0.2, 0, Math.PI, 0); ctx.fill();
+      } else if (o.t === 'portal') {
+        drawPortal(o, X, Y, now);
       } else if (o.t === 'orb') {
         var used = S.p && S.p.used[o.id] && S.mode !== 'menu';
         var cx = X + T / 2, cy = Y + T / 2, r = T * 0.32;
@@ -957,6 +1010,36 @@ var Core = (function () {
         ctx.beginPath(); ctx.arc(cx - r * 0.3, cy - r * 0.3, r * 0.3, 0, Math.PI * 2); ctx.fill();
       }
     }
+  }
+
+  var PORTAL_COLORS = { U: '#ffe14d', D: '#3de0ff', '>': '#ff7ad9', '<': '#7dffb0' };
+  function drawPortal(o, X, Y, now) {
+    var c = PORTAL_COLORS[o.k], cx = X + T / 2, cy = Y + T / 2;
+    var rx = T * 0.42, ry = T * 1.5;
+    ctx.save();
+    ctx.lineWidth = 8; ctx.strokeStyle = hexA(c, 0.25);
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = 3; ctx.strokeStyle = c;
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = hexA(c, 0.12 + 0.08 * Math.sin(now * 8));
+    ctx.fill();
+    // symbol: arrow for gravity, chevrons for speed
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = Math.max(2, T * 0.08); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    var a = T * 0.22;
+    if (o.k === 'U' || o.k === 'D') {
+      var d = o.k === 'U' ? -1 : 1;
+      ctx.moveTo(cx, cy - d * a * 1.6); ctx.lineTo(cx, cy + d * a * 1.6);
+      ctx.moveTo(cx - a, cy + d * a * 0.6); ctx.lineTo(cx, cy + d * a * 1.6); ctx.lineTo(cx + a, cy + d * a * 0.6);
+    } else {
+      var n = o.k === '>' ? 2 : 1;
+      for (var q = 0; q < n; q++) {
+        var ox = (q - (n - 1) / 2) * a * 1.1;
+        ctx.moveTo(cx + ox - a * 0.5, cy - a); ctx.lineTo(cx + ox + a * 0.5, cy); ctx.lineTo(cx + ox - a * 0.5, cy + a);
+      }
+    }
+    ctx.stroke();
+    ctx.restore();
   }
 
   function drawFinish(len, th) {
@@ -998,7 +1081,7 @@ var Core = (function () {
     var aj = S.theme.airJumps || 0;
     for (var k = 0; k < aj; k++) {
       ctx.fillStyle = k < p.air ? '#ffffff' : 'rgba(255,255,255,0.18)';
-      ctx.beginPath(); ctx.arc(cx + (k - (aj - 1) / 2) * T * 0.36, cy - T * 0.85, T * 0.1, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx + (k - (aj - 1) / 2) * T * 0.36, cy - T * 0.85 * p.gs, T * 0.1, 0, Math.PI * 2); ctx.fill();
     }
   }
 
