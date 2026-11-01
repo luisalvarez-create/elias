@@ -136,7 +136,7 @@ button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
 <script>
 /*CORE-START*/
 var Core = (function () {
-  var G = 95, JUMP = 20.2, PAD = 27.5, ORB = 19.5, DT = 1 / 120, MAXFALL = -36;
+  var G = 95, JUMP = 20.2, PAD = 27.5, ORB = 19.5, AIRJUMP = 17, DT = 1 / 120, MAXFALL = -36;
 
   // Each chunk is drawn top-to-bottom; the last row sits on the ground (y = 0).
   // #  block   ^ spike   v hanging spike   * jump pad   o jump orb
@@ -182,7 +182,48 @@ var Core = (function () {
       '.......o.......',
       '...............',
       '...###.....###.',
-      '...^^^^^^^^^^^.']
+      '...^^^^^^^^^^^.'],
+    // Chunks for the multi-jump level (Cielo Eléctrico)
+    dwall: [
+      '...##.....',
+      '...##.....',
+      '...##.....'],
+    dwall2: [
+      '.........##.....',
+      '...##....##.....',
+      '...##....##.....',
+      '...##^^^^##.....'],
+    field: [
+      '...^^^^^^^^.....'],
+    stepsup: [
+      '...............##.......',
+      '........................',
+      '.........##.............',
+      '........................',
+      '...##...................',
+      '.....^^^^^^^^^^^^^^.....'],
+    sky1: [
+      '.........######################.........',
+      '............vv....vv......v.............',
+      '........................................',
+      '........................................',
+      '...............^......^.................',
+      '....####################....######......',
+      '....##..................................',
+      '....##..................................',
+      '....##^^^^^^^^^^^^^^^^^^^^^^^^^^^^......'],
+    sky2: [
+      '............######################........',
+      '.................v............vv..........',
+      '..........................................',
+      '..........................................',
+      '..............^^............^.............',
+      '........############....#############.....',
+      '........##................................',
+      '........##................................',
+      '........##................................',
+      '...#....##................................',
+      '...#^^^^##^^^^^^^^^^^^^^^^^^^^^^^^^^^.....']
   };
 
   var LEVELS = [
@@ -197,7 +238,13 @@ var Core = (function () {
       seq: ['s3', 'tunnel', 'hop', 'orb', 'tower', 'pad', 'pit', 'bspike', 'tunnel', 'plat', 'orb', 'hop', 'pit', 'tower', 'dbl', 's3', 'climb', 'orb'] },
     { id: 'vertigo', name: 'Vértigo', diff: 'Extremo', speed: 12.2, bpm: 144,
       bass: [42, 45, 40, 47], color: '#ff8a3d', bg: ['#4a0d1e', '#13030a'], ground: '#34081a',
-      seq: ['dbl', 'tunnel', 'pit', 'orb', 'tower', 'hop', 'bspike', 'pad', 'pit', 'tunnel', 'orb', 'plat', 'tower', 'pit', 'hop', 'orb', 's3', 'tunnel', 'climb', 'pit'] }
+      seq: ['dbl', 'tunnel', 'pit', 'orb', 'tower', 'hop', 'bspike', 'pad', 'pit', 'tunnel', 'orb', 'plat', 'tower', 'pit', 'hop', 'orb', 's3', 'tunnel', 'climb', 'pit'] },
+    { id: 'cielo', name: 'Cielo Eléctrico', diff: 'Saltos en el aire', speed: 10.5, bpm: 140, style: 'edm',
+      airJumps: 2, camLead: 4.2,
+      hint: 'Toca otra vez en el aire: tienes 2 saltos extra',
+      bass: [45, 41, 36, 43], chords: [[0, 3, 7], [0, 4, 7], [0, 4, 7], [0, 4, 7]],
+      color: '#8f7bff', bg: ['#1d1158', '#05031a'], ground: '#150c42',
+      seq: ['s2', 'dwall', 's3', 'field', 'stepsup', 'dwall2', 'sky1', 'orb', 'field', 'tunnel', 'sky2', 'dwall', 'hop', 'stepsup', 'sky1', 'field', 'dwall2', 'sky2'] }
   ];
 
   var ENDLESS = { id: 'infinito', name: 'Infinito', diff: 'Sin final', speed: 10.4, bpm: 132,
@@ -259,15 +306,16 @@ var Core = (function () {
   }
 
   function newPlayer() {
-    return { x: 0, y: 0, vy: 0, grounded: true, dead: false, used: {}, i: 0, rot: 0 };
+    return { x: 0, y: 0, vy: 0, grounded: true, dead: false, used: {}, i: 0, rot: 0, air: 0 };
   }
 
   function overlap(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
     return ax1 < bx2 && ax2 > bx1 && ay1 < by2 && ay2 > by1;
   }
 
-  // Advances the player one fixed tick. Returns a bit mask of events: 1 jump, 2 pad, 4 orb, 8 landed.
-  function step(p, objs, held, speed) {
+  // Advances the player one fixed tick. Returns a bit mask of events: 1 jump, 2 pad, 4 orb, 8 landed, 16 air jump.
+  // press = a new tap this tick; airJumps = extra jumps allowed in the air (0 on the classic levels).
+  function step(p, objs, held, speed, press, airJumps) {
     var ev = 0, wasGrounded = p.grounded;
     p.x += speed * DT;
     p.vy -= G * DT;
@@ -301,7 +349,9 @@ var Core = (function () {
       if (p.dead) return ev;
     }
     if (p.grounded && !wasGrounded) ev |= 8;
+    if (p.grounded) p.air = airJumps || 0;
     if (p.grounded && held) { p.vy = JUMP; p.grounded = false; ev |= 1; }
+    else if (!p.grounded && press && p.air > 0 && !(ev & 4)) { p.vy = AIRJUMP; p.air--; ev |= 16; }
     return ev;
   }
 
@@ -354,6 +404,8 @@ var Core = (function () {
       if (!this.ctx) return;
       this.stop();
       this.bpm = theme.bpm; this.bass = theme.bass;
+      this.style = theme.style || 'classic'; this.chords = theme.chords;
+      this.ensureBus();
       this.stepN = 0;
       this.nextTime = this.ctx.currentTime + 0.06;
       this.startTime = this.nextTime;
@@ -375,7 +427,19 @@ var Core = (function () {
         this.nextTime += spb; this.stepN++;
       }
     },
+    ensureBus: function () {
+      if (this.bus) return;
+      // synth bus that "pumps" (ducks) on every kick, the classic electronic sidechain sound
+      this.bus = this.ctx.createGain(); this.bus.gain.value = 1;
+      var hp = this.ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 40;
+      this.bus.connect(hp); hp.connect(this.master);
+      this.delay = this.ctx.createDelay(1); this.delay.delayTime.value = 0.32;
+      var fb = this.ctx.createGain(); fb.gain.value = 0.3;
+      var wet = this.ctx.createGain(); wet.gain.value = 0.25;
+      this.delay.connect(fb); fb.connect(this.delay); this.delay.connect(wet); wet.connect(this.master);
+    },
     playStep: function (n, t) {
+      if (this.style === 'edm') return this.edmStep(n, t);
       var s = n % 16, bar = Math.floor(n / 16);
       var root = this.bass[bar % this.bass.length];
       if (s % 4 === 0) this.kick(t);
@@ -387,6 +451,61 @@ var Core = (function () {
         var lead = [24, null, null, 27, null, null, 31, null, null, null, 29, null, 27, null, null, null][s];
         if (lead !== null) this.leadNote(t, root + lead);
       }
+    },
+    edmStep: function (n, t) {
+      var s = n % 16, bar = Math.floor(n / 16);
+      var root = this.bass[bar % this.bass.length];
+      var chord = this.chords[bar % this.chords.length];
+      var phrase = bar % 8;
+      var build = phrase === 7;
+      this.delay.delayTime.setValueAtTime(60 / this.bpm * 0.75, t);
+      // drums
+      if (s % 4 === 0 && !(build && s >= 8)) {
+        this.kick(t);
+        this.bus.gain.setValueAtTime(0.25, t);
+        this.bus.gain.linearRampToValueAtTime(1, t + 60 / this.bpm * 0.8);
+      }
+      this.hat(t, s % 2 ? 0.07 : 0.035);
+      if (s % 4 === 2) this.noiseHit(t, 'highpass', 6000, 0.1, 0.16);
+      if (s === 4 || s === 12) this.clap(t);
+      if (build && s >= 8) this.noiseHit(t, 'bandpass', 1200 + (s - 8) * 400, 0.12 + (s - 8) * 0.03, 0.08);
+      // offbeat bass
+      if (s % 4 === 2 || s === 15) this.edmBass(t, root - 12);
+      // syncopated supersaw stabs
+      if (bar >= 2 && [0, 3, 6, 10, 12].indexOf(s) >= 0) {
+        var cut = 900 + 2600 * (phrase / 7);
+        for (var c = 0; c < chord.length; c++) this.supersaw(t, root + 12 + chord[c], cut);
+      }
+      // arpeggio
+      if (bar >= 4) {
+        var arp = [0, 1, 2, 3, 2, 1, 0, 3][s % 8];
+        var notes = [chord[0], chord[1], chord[2], 12];
+        this.pluck(t, root + 24 + notes[arp]);
+      }
+    },
+    edmBass: function (t, m) {
+      var o = this.ctx.createOscillator(), o2 = this.ctx.createOscillator(), f = this.ctx.createBiquadFilter(), g = this.ctx.createGain();
+      o.type = 'sawtooth'; o2.type = 'square'; o.frequency.value = this.freq(m); o2.frequency.value = this.freq(m) * 0.5;
+      f.type = 'lowpass'; f.Q.value = 6; f.frequency.setValueAtTime(2200, t); f.frequency.exponentialRampToValueAtTime(180, t + 0.14);
+      this.env(g, t, 0.22, 0.16); o.connect(f); o2.connect(f); f.connect(g); g.connect(this.bus);
+      o.start(t); o2.start(t); o.stop(t + 0.18); o2.stop(t + 0.18);
+    },
+    supersaw: function (t, m, cut) {
+      var f = this.ctx.createBiquadFilter(), g = this.ctx.createGain();
+      f.type = 'lowpass'; f.frequency.value = cut; f.Q.value = 2;
+      this.env(g, t, 0.035, 0.2); f.connect(g); g.connect(this.bus); g.connect(this.delay);
+      for (var d = -1; d <= 1; d++) {
+        var o = this.ctx.createOscillator();
+        o.type = 'sawtooth'; o.frequency.value = this.freq(m); o.detune.value = d * 14;
+        o.connect(f); o.start(t); o.stop(t + 0.22);
+      }
+    },
+    pluck: function (t, m) {
+      var o = this.ctx.createOscillator(), f = this.ctx.createBiquadFilter(), g = this.ctx.createGain();
+      o.type = 'square'; o.frequency.value = this.freq(m);
+      f.type = 'lowpass'; f.frequency.setValueAtTime(5000, t); f.frequency.exponentialRampToValueAtTime(600, t + 0.1);
+      this.env(g, t, 0.04, 0.12); o.connect(f); f.connect(g); g.connect(this.bus); g.connect(this.delay);
+      o.start(t); o.stop(t + 0.14);
     },
     freq: function (m) { return 440 * Math.pow(2, (m - 69) / 12); },
     env: function (g, t, peak, dur) {
@@ -446,7 +565,7 @@ var Core = (function () {
     level: null, p: null, attempts: 1, deadTimer: 0, camX: 0, camY: 0,
     shake: 0, particles: [], genX: 0, flash: 0, acc: 0, menuX: 0, menuLevel: null
   };
-  var input = { pointers: {}, key: false };
+  var input = { pointers: {}, key: false, press: false };
   function held() { return input.key || Object.keys(input.pointers).length > 0; }
 
   function resize() {
@@ -530,7 +649,8 @@ var Core = (function () {
     S.p = Core.newPlayer();
     S.particles = [];
     S.camX = S.p.x - (W / T) * 0.3; S.camY = 0;
-    S.acc = 0; S.flash = 0;
+    S.acc = 0; S.flash = 0; input.press = false;
+    S.hintT = S.theme.hint && S.attempts <= 3 ? 3.2 : 0;
     S.mode = 'play';
     updateHud();
     Sound.start(S.theme);
@@ -600,6 +720,7 @@ var Core = (function () {
   // ---------- Update ----------
   function update(dt) {
     S.flash = Math.max(0, S.flash - dt * 3);
+    if (S.mode === 'play' && S.hintT > 0) S.hintT -= dt;
     S.shake = Math.max(0, S.shake - dt);
     updateParticles(dt);
 
@@ -623,7 +744,9 @@ var Core = (function () {
     var h = held();
     while (S.acc >= Core.DT) {
       S.acc -= Core.DT;
-      var ev = Core.step(p, S.level.objs, h, S.theme.speed);
+      var pr = input.press; input.press = false;
+      var ev = Core.step(p, S.level.objs, h, S.theme.speed, pr, S.theme.airJumps);
+      if (ev & 16) { Sound.blip(76 + (S.theme.airJumps - p.air) * 4); airRing(p); }
       if (ev & 2) { Sound.blip(79); burst(p.x + 0.5, p.y, '#ffe14d', 10); }
       if (ev & 4) { Sound.blip(84); burst(p.x + 0.5, p.y + 0.5, '#ffe14d', 12); }
       if (ev & 8) burst(p.x + 0.2, p.y, S.theme.color, 4);
@@ -647,9 +770,16 @@ var Core = (function () {
     // camera
     S.camX = p.x - (W / T) * 0.3;
     var topRoom = GY / T;
-    var targetY = Math.max(0, p.y + 2.6 - topRoom);
+    var targetY = Math.max(0, p.y + (S.theme.camLead || 2.6) - topRoom);
     S.camY += (targetY - S.camY) * Math.min(1, dt * 6);
     updateHud();
+  }
+
+  function airRing(p) {
+    for (var i = 0; i < 14; i++) {
+      var a = i / 14 * Math.PI * 2;
+      S.particles.push({ x: p.x + 0.5, y: p.y + 0.2, vx: Math.cos(a) * 5, vy: Math.sin(a) * 2.5, life: 0.3, max: 0.3, s: 0.09, c: '#ffffff', g: 0 });
+    }
   }
 
   function burst(x, y, c, n) {
@@ -710,6 +840,17 @@ var Core = (function () {
     drawParticles();
     ctx.restore();
 
+    if (S.hintT > 0 && S.mode === 'play') {
+      ctx.globalAlpha = Math.min(1, S.hintT);
+      ctx.font = '700 ' + Math.round(Math.max(15, Math.min(22, W / 26))) + 'px "Chakra Petch", system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      var tw = ctx.measureText(S.theme.hint).width;
+      ctx.fillStyle = 'rgba(8,6,30,0.75)';
+      ctx.fillRect(W / 2 - tw / 2 - 14, H * 0.2 - 22, tw + 28, 36);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(S.theme.hint, W / 2, H * 0.2 + 3);
+      ctx.globalAlpha = 1; ctx.textAlign = 'left';
+    }
     if (S.flash > 0) { ctx.fillStyle = 'rgba(255,255,255,' + (S.flash * 0.35) + ')'; ctx.fillRect(0, 0, W, H); }
   }
 
@@ -853,6 +994,12 @@ var Core = (function () {
     ctx.fillStyle = '#2a1600';
     ctx.fillRect(-s * 0.08, -s * 0.08, s * 0.16, s * 0.16);
     ctx.restore();
+    // remaining air jumps
+    var aj = S.theme.airJumps || 0;
+    for (var k = 0; k < aj; k++) {
+      ctx.fillStyle = k < p.air ? '#ffffff' : 'rgba(255,255,255,0.18)';
+      ctx.beginPath(); ctx.arc(cx + (k - (aj - 1) / 2) * T * 0.36, cy - T * 0.85, T * 0.1, 0, Math.PI * 2); ctx.fill();
+    }
   }
 
   function drawParticles() {
@@ -887,6 +1034,7 @@ var Core = (function () {
     e.preventDefault();
     Sound.unlock();
     input.pointers[e.pointerId] = 1;
+    input.press = true;
   });
   function release(e) { delete input.pointers[e.pointerId]; }
   window.addEventListener('pointerup', release);
@@ -896,7 +1044,9 @@ var Core = (function () {
   var JUMP_KEYS = { Space: 1, ArrowUp: 1, KeyW: 1, Enter: 0 };
   window.addEventListener('keydown', function (e) {
     if (JUMP_KEYS[e.code] && S.mode !== 'menu' && !document.activeElement.closest('.overlay:not([hidden])')) {
-      e.preventDefault(); Sound.unlock(); input.key = true;
+      e.preventDefault(); Sound.unlock();
+      if (!e.repeat) input.press = true;
+      input.key = true;
     }
     if (e.code === 'Escape' || e.code === 'KeyP') {
       if (S.mode === 'pause') resume(); else pause();
